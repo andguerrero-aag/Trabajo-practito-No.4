@@ -1,0 +1,416 @@
+8-puzzle:
+
+
+#include <iostream>
+#include <vector>
+#include <queue>
+#include <unordered_set>
+#include <algorithm>
+#include <cmath>
+
+using namespace std;
+
+// Estructura para representar un estado del puzzle
+struct Estado {
+    vector<vector<int>> tablero;
+    int x, y;  // Posición del espacio vacío (0)
+    int g;     // Costo desde el inicio
+    int h;     // Heurística (distancia de Manhattan)
+    string camino;  // Secuencia de movimientos
+    
+    Estado() : x(0), y(0), g(0), h(0), camino("") {}
+    
+    int f() const { return g + h; }  // Función de evaluación A*
+    
+    // Convertir el tablero a string para usar en hash
+    string toString() const {
+        string s = "";
+        for (int i = 0; i < 3; i++) {
+            for (int j = 0; j < 3; j++) {
+                s += to_string(tablero[i][j]);
+            }
+        }
+        return s;
+    }
+};
+
+// Comparador para la cola de prioridad (min-heap)
+struct CompararEstado {
+    bool operator()(const Estado& a, const Estado& b) const {
+        if (a.f() == b.f()) return a.h > b.h;
+        return a.f() > b.f();
+    }
+};
+
+class PuzzleSolver {
+private:
+    Estado estadoObjetivo;
+    
+    // Calcular la distancia de Manhattan
+    int calcularManhattan(const vector<vector<int>>& tablero) {
+        int distancia = 0;
+        for (int i = 0; i < 3; i++) {
+            for (int j = 0; j < 3; j++) {
+                int valor = tablero[i][j];
+                if (valor != 0) {
+                    // Buscar la posición objetivo del valor
+                    bool encontrado = false;
+                    for (int ti = 0; ti < 3 && !encontrado; ti++) {
+                        for (int tj = 0; tj < 3 && !encontrado; tj++) {
+                            if (estadoObjetivo.tablero[ti][tj] == valor) {
+                                distancia += abs(i - ti) + abs(j - tj);
+                                encontrado = true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return distancia;
+    }
+    
+    // Verificar si el estado es el objetivo
+    bool esObjetivo(const Estado& estado) {
+        return estado.tablero == estadoObjetivo.tablero;
+    }
+    
+    // Contar inversiones en un arreglo lineal
+    int contarInversiones(const vector<int>& arr) {
+        int inversiones = 0;
+        for (size_t i = 0; i < arr.size(); i++) {
+            for (size_t j = i + 1; j < arr.size(); j++) {
+                if (arr[i] > arr[j]) {
+                    inversiones++;
+                }
+            }
+        }
+        return inversiones;
+    }
+    
+    // Verificar si el puzzle es resoluble comparando con el objetivo
+    bool esResoluble(const vector<vector<int>>& tableroInicial) {
+        // Convertir ambos tableros a arreglos lineales (sin el 0)
+        vector<int> inicial, objetivo;
+        
+        for (int i = 0; i < 3; i++) {
+            for (int j = 0; j < 3; j++) {
+                if (tableroInicial[i][j] != 0) {
+                    inicial.push_back(tableroInicial[i][j]);
+                }
+                if (estadoObjetivo.tablero[i][j] != 0) {
+                    objetivo.push_back(estadoObjetivo.tablero[i][j]);
+                }
+            }
+        }
+        
+        // Contar inversiones en ambos
+        int inversionesInicial = contarInversiones(inicial);
+        int inversionesObjetivo = contarInversiones(objetivo);
+        
+        // Ambos deben tener la misma paridad (ambos pares o ambos impares)
+        bool mismParidad = (inversionesInicial % 2) == (inversionesObjetivo % 2);
+        
+        cout << "\n[DEBUG] Inversiones estado inicial: " << inversionesInicial;
+        cout << " (" << (inversionesInicial % 2 == 0 ? "PAR" : "IMPAR") << ")\n";
+        cout << "[DEBUG] Inversiones estado objetivo: " << inversionesObjetivo;
+        cout << " (" << (inversionesObjetivo % 2 == 0 ? "PAR" : "IMPAR") << ")\n";
+        
+        return mismParidad;
+    }
+    
+    // Generar estados sucesores
+    vector<Estado> generarSucesores(const Estado& estado) {
+        vector<Estado> sucesores;
+        int dx[] = {-1, 1, 0, 0};  // Arriba, Abajo, Izquierda, Derecha
+        int dy[] = {0, 0, -1, 1};
+        char movimientos[] = {'U', 'D', 'L', 'R'};  // Up, Down, Left, Right
+        
+        for (int i = 0; i < 4; i++) {
+            int nx = estado.x + dx[i];
+            int ny = estado.y + dy[i];
+            
+            if (nx >= 0 && nx < 3 && ny >= 0 && ny < 3) {
+                Estado nuevoEstado = estado;
+                
+                // Intercambiar el espacio vacío con la pieza adyacente
+                swap(nuevoEstado.tablero[estado.x][estado.y], 
+                     nuevoEstado.tablero[nx][ny]);
+                
+                nuevoEstado.x = nx;
+                nuevoEstado.y = ny;
+                nuevoEstado.g = estado.g + 1;
+                nuevoEstado.h = calcularManhattan(nuevoEstado.tablero);
+                nuevoEstado.camino = estado.camino + movimientos[i];
+                
+                sucesores.push_back(nuevoEstado);
+            }
+        }
+        
+        return sucesores;
+    }
+    
+public:
+    PuzzleSolver() {
+        // Configuración objetivo según el PDF: 1 2 3 / 8 _ 4 / 7 6 5
+        estadoObjetivo.tablero = {{1, 2, 3}, {8, 0, 4}, {7, 6, 5}};
+        estadoObjetivo.x = 1;
+        estadoObjetivo.y = 1;
+    }
+    
+    // Resolver el puzzle usando A*
+    bool resolver(Estado& estadoInicial) {
+        cout << "\nEstado Objetivo configurado:\n";
+        imprimirTablero(estadoObjetivo.tablero);
+        
+        if (!esResoluble(estadoInicial.tablero)) {
+            cout << "\n❌ Este puzzle NO es resoluble con el objetivo dado.\n";
+            cout << "Las paridades de inversiones no coinciden.\n";
+            return false;
+        }
+        
+        if (esObjetivo(estadoInicial)) {
+            cout << "\n✓ El puzzle ya está resuelto.\n";
+            return true;
+        }
+        
+        cout << "\n✓ El puzzle ES resoluble. Buscando solución...\n\n";
+        
+        priority_queue<Estado, vector<Estado>, CompararEstado> abiertos;
+        unordered_set<string> visitados;
+        
+        estadoInicial.h = calcularManhattan(estadoInicial.tablero);
+        abiertos.push(estadoInicial);
+        
+        int nodosExplorados = 0;
+        int maxNodos = 200000; // Límite de seguridad
+        
+        while (!abiertos.empty() && nodosExplorados < maxNodos) {
+            Estado actual = abiertos.top();
+            abiertos.pop();
+            
+            nodosExplorados++;
+            
+            if (nodosExplorados % 10000 == 0) {
+                cout << "Explorando... Nodos: " << nodosExplorados 
+                     << ", f=" << actual.f() << "\r" << flush;
+            }
+            
+            if (esObjetivo(actual)) {
+                cout << "\n\n✓ ¡Solución encontrada!\n";
+                cout << "═══════════════════════════════════════\n";
+                cout << "Número de movimientos: " << actual.camino.length() << "\n";
+                cout << "Nodos explorados: " << nodosExplorados << "\n";
+                cout << "Secuencia de movimientos: " << actual.camino << "\n";
+                cout << "═══════════════════════════════════════\n\n";
+                
+                mostrarSolucion(estadoInicial, actual.camino);
+                return true;
+            }
+            
+            string estadoStr = actual.toString();
+            if (visitados.count(estadoStr)) continue;
+            visitados.insert(estadoStr);
+            
+            vector<Estado> sucesores = generarSucesores(actual);
+            for (const auto& sucesor : sucesores) {
+                if (!visitados.count(sucesor.toString())) {
+                    abiertos.push(sucesor);
+                }
+            }
+        }
+        
+        cout << "\n❌ No se encontró solución después de " << nodosExplorados << " nodos.\n";
+        return false;
+    }
+    
+    // Mostrar la secuencia completa de la solución
+    void mostrarSolucion(Estado estado, const string& movimientos) {
+        cout << "SECUENCIA DE SOLUCIÓN:\n";
+        cout << "══════════════════════════════════════════\n\n";
+        
+        cout << "Estado Inicial:\n";
+        imprimirTablero(estado.tablero);
+        cout << "\n";
+        
+        for (size_t i = 0; i < movimientos.length(); i++) {
+            char mov = movimientos[i];
+            int dx = 0, dy = 0;
+            string direccion;
+            
+            switch(mov) {
+                case 'U': dx = -1; direccion = "ARRIBA ↑"; break;
+                case 'D': dx = 1;  direccion = "ABAJO ↓"; break;
+                case 'L': dy = -1; direccion = "IZQUIERDA ←"; break;
+                case 'R': dy = 1;  direccion = "DERECHA →"; break;
+            }
+            
+            int nx = estado.x + dx;
+            int ny = estado.y + dy;
+            
+            swap(estado.tablero[estado.x][estado.y], estado.tablero[nx][ny]);
+            estado.x = nx;
+            estado.y = ny;
+            
+            cout << "Paso " << (i + 1) << ": Mover " << direccion << "\n";
+            imprimirTablero(estado.tablero);
+            cout << "\n";
+        }
+        
+        cout << "══════════════════════════════════════════\n";
+    }
+    
+    // Imprimir el tablero de forma visual
+    void imprimirTablero(const vector<vector<int>>& tablero) {
+        cout << "┌─────┬─────┬─────┐\n";
+        for (int i = 0; i < 3; i++) {
+            cout << "│";
+            for (int j = 0; j < 3; j++) {
+                if (tablero[i][j] == 0) {
+                    cout << "     │";
+                } else {
+                    cout << "  " << tablero[i][j] << "  │";
+                }
+            }
+            cout << "\n";
+            if (i < 2) {
+                cout << "├─────┼─────┼─────┤\n";
+            }
+        }
+        cout << "└─────┴─────┴─────┘\n";
+    }
+};
+
+// Función para leer el estado inicial del usuario
+Estado leerEstadoInicial() {
+    Estado estado;
+    estado.tablero.resize(3, vector<int>(3));
+    
+    cout << "\n╔════════════════════════════════════════════╗\n";
+    cout << "║   SOLUCIONADOR DE 8-PUZZLE CON A*         ║\n";
+    cout << "╚════════════════════════════════════════════╝\n\n";
+    
+    cout << "Ingrese la configuración inicial del puzzle (3x3).\n";
+    cout << "Use 0 para representar el espacio vacío.\n";
+    cout << "Ingrese los números fila por fila, separados por espacios:\n\n";
+    
+    for (int i = 0; i < 3; i++) {
+        cout << "Fila " << (i + 1) << ": ";
+        for (int j = 0; j < 3; j++) {
+            cin >> estado.tablero[i][j];
+            if (estado.tablero[i][j] == 0) {
+                estado.x = i;
+                estado.y = j;
+            }
+        }
+    }
+    
+    return estado;
+}
+
+int main() {
+    PuzzleSolver solver;
+    
+    // Leer el estado inicial
+    Estado estadoInicial = leerEstadoInicial();
+    
+    cout << "\n\nEstado inicial ingresado:\n";
+    solver.imprimirTablero(estadoInicial.tablero);
+    
+    cout << "\n\nAnalizando resolubilidad...\n";
+    
+    // Resolver el puzzle
+    solver.resolver(estadoInicial);
+    
+    return 0;
+}
+
+
+
+
+1.	Descripción del programa
+Este programa implementa un solucionador del problema clásico del 8-Puzzle utilizando el algoritmo de búsqueda informada A* (A estrella).
+El objetivo es encontrar la secuencia óptima de movimientos que transforma un estado inicial dado en un estado objetivo predefinido, minimizando el número de movimientos.
+El estado objetivo utilizado es:
+1  2  3
+8  _  4
+7  6  5
+
+donde _ representa el espacio vacío.
+2.	Ejecución del programa
+2.1 Requisitos
+Compilador de C++ estándar (por ejemplo, g++)
+Consola o terminal
+Sistema operativo: Windows, Linux o macOS
+2.2 Compilación
+Ubíquese en la carpeta donde se encuentra el archivo fuente y ejecute:
+g++ main.cpp -o puzzle
+2.3 Ejecución
+En Windows
+puzzle
+
+o
+.\puzzle
+En Linux / macOS
+./puzzle
+2.4 Ingreso de datos
+Al ejecutar el programa, se solicita al usuario ingresar la configuración inicial del puzzle:
+El tablero se ingresa como una matriz de 3 filas por 3 columnas
+Se debe usar el número 0 para representar el espacio vacío
+Los valores se ingresan fila por fila, separados por espacios
+Ejemplo de entrada válida:
+1 2 3
+4 0 5
+6 7 8
+2.5 Salida del programa
+El programa:
+Muestra el estado objetivo.
+Analiza si el puzzle es resoluble, usando el criterio de inversiones.
+Si es resoluble:
+Ejecuta el algoritmo A*
+Muestra el número de movimientos
+Muestra el número de nodos explorados
+Imprime la secuencia de movimientos
+Presenta paso a paso la evolución del tablero hasta llegar a la solución
+Si no es resoluble, informa al usuario que no existe solución para el estado dado.
+3.	Metodología empleada
+3.1 Representación del estado
+Cada estado del puzzle se modela mediante:
+Una matriz 3x3 que representa el tablero
+La posición del espacio vacío
+El costo acumulado g (número de movimientos realizados)
+La heurística h
+La secuencia de movimientos realizada hasta ese estado
+3.2 Algoritmo A*
+Se utilizó el algoritmo A*, cuya función de evaluación es:
+f(n) = g(n) + h(n)
+
+donde:
+g(n) es el costo desde el estado inicial
+h(n) es la heurística estimada hasta el objetivo
+Los estados se almacenan en una cola de prioridad, ordenados por el menor valor de f(n).
+3.3 Heurística: Distancia de Manhattan
+La heurística utilizada es la distancia de Manhattan, que calcula la suma de las distancias horizontales y verticales de cada ficha respecto a su posición en el estado objetivo.
+Esta heurística es:
+Admisible
+Consistente
+Adecuada para el problema del 8-Puzzle
+3.4 Verificación de resolubilidad
+Antes de ejecutar la búsqueda, el programa verifica si el puzzle es resoluble comparando la paridad del número de inversiones entre el estado inicial y el estado objetivo.
+Si las paridades no coinciden, el programa concluye correctamente que no existe solución.
+3.5 Generación de sucesores
+Desde cada estado se generan hasta cuatro posibles movimientos:
+Arriba (U)
+Abajo (D)
+Izquierda (L)
+Derecha (R)
+Cada movimiento genera un nuevo estado válido dentro de los límites del tablero.
+3.6 Control de estados visitados
+Para evitar ciclos y exploraciones repetidas, los estados visitados se almacenan en una estructura de tipo unordered_set, utilizando una representación en cadena del tablero.
+4.	Observaciones finales
+El programa garantiza encontrar la solución óptima si esta existe.
+Incluye controles de seguridad para evitar exploraciones excesivas.
+Está diseñado con fines académicos, para el estudio de algoritmos de búsqueda informada y heurísticas.
+Si quieres, puedo:
+Acortarlo para una entrega más simple
+Hacerlo aún más técnico (nivel IA / algoritmos)
+Adaptarlo exactamente al formato que use tu profesor

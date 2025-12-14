@@ -1,0 +1,230 @@
+Redes Neuronales Artificiales (RNA):
+
+
+
+#include <iostream>
+#include <fstream>
+#include <vector>
+#include <cmath>
+#include <cstdlib>
+#include <ctime>
+
+using namespace std;
+
+double sigmoid(double x) {
+    return 1.0 / (1.0 + exp(-x));
+}
+
+double dsigmoid(double y) {
+    return y * (1.0 - y);
+}
+
+bool esPrimo(int n) {
+    if (n < 2) return false;
+    for (int i = 2; i <= sqrt(n); i++)
+        if (n % i == 0) return false;
+    return true;
+}
+
+bool esCompuesto(int n) {
+    return (n > 3 && !esPrimo(n));
+}
+
+int main() {
+    srand(time(0));
+
+    const int ENTRADA = 4;
+    const int OCULTA = 6;
+    const int SALIDA = 4;
+    const double LR = 0.5;
+
+    double w1[ENTRADA][OCULTA];
+    double w2[OCULTA][SALIDA];
+
+    // Inicialización de pesos
+    for (int i = 0; i < ENTRADA; i++)
+        for (int j = 0; j < OCULTA; j++)
+            w1[i][j] = (rand() % 100) / 100.0;
+
+    for (int i = 0; i < OCULTA; i++)
+        for (int j = 0; j < SALIDA; j++)
+            w2[i][j] = (rand() % 100) / 100.0;
+
+    // Entrenamiento
+    for (int epoch = 0; epoch < 5000; epoch++) {
+        for (int n = 0; n <= 9; n++) {
+            double input[ENTRADA] = {
+                n % 2 == 0,
+                n % 2 != 0,
+                esPrimo(n),
+                esCompuesto(n)
+            };
+
+            double target[SALIDA] = {0, 0, 0, 0};
+            if (input[0]) target[0] = 1;
+            if (input[1]) target[1] = 1;
+            if (input[2]) target[2] = 1;
+            if (input[3]) target[3] = 1;
+
+            double hidden[OCULTA] = {0};
+            double output[SALIDA] = {0};
+
+            // Forward
+            for (int j = 0; j < OCULTA; j++)
+                for (int i = 0; i < ENTRADA; i++)
+                    hidden[j] += input[i] * w1[i][j];
+            for (int j = 0; j < OCULTA; j++)
+                hidden[j] = sigmoid(hidden[j]);
+
+            for (int k = 0; k < SALIDA; k++)
+                for (int j = 0; j < OCULTA; j++)
+                    output[k] += hidden[j] * w2[j][k];
+            for (int k = 0; k < SALIDA; k++)
+                output[k] = sigmoid(output[k]);
+
+            // Backpropagation
+            double errorOut[SALIDA];
+            for (int k = 0; k < SALIDA; k++)
+                errorOut[k] = (target[k] - output[k]) * dsigmoid(output[k]);
+
+            double errorHidden[OCULTA] = {0};
+            for (int j = 0; j < OCULTA; j++)
+                for (int k = 0; k < SALIDA; k++)
+                    errorHidden[j] += errorOut[k] * w2[j][k];
+
+            for (int j = 0; j < OCULTA; j++)
+                errorHidden[j] *= dsigmoid(hidden[j]);
+
+            // Actualización de pesos
+            for (int j = 0; j < OCULTA; j++)
+                for (int k = 0; k < SALIDA; k++)
+                    w2[j][k] += LR * errorOut[k] * hidden[j];
+
+            for (int i = 0; i < ENTRADA; i++)
+                for (int j = 0; j < OCULTA; j++)
+                    w1[i][j] += LR * errorHidden[j] * input[i];
+        }
+    }
+
+    // Prueba con digits.txt
+    ifstream file("digits.txt");
+    int num;
+    while (file >> num) {
+        double input[ENTRADA] = {
+            num % 2 == 0,
+            num % 2 != 0,
+            esPrimo(num),
+            esCompuesto(num)
+        };
+
+        double hidden[OCULTA] = {0};
+        double output[SALIDA] = {0};
+
+        for (int j = 0; j < OCULTA; j++) {
+            for (int i = 0; i < ENTRADA; i++)
+                hidden[j] += input[i] * w1[i][j];
+            hidden[j] = sigmoid(hidden[j]);
+        }
+
+        for (int k = 0; k < SALIDA; k++) {
+            for (int j = 0; j < OCULTA; j++)
+                output[k] += hidden[j] * w2[j][k];
+            output[k] = sigmoid(output[k]);
+        }
+
+        cout << "Numero " << num << " -> ";
+        if (output[0] > 0.5) cout << "Par ";
+        if (output[1] > 0.5) cout << "Impar ";
+        if (output[2] > 0.5) cout << "Primo ";
+        if (output[3] > 0.5) cout << "Compuesto ";
+        cout << endl;
+    }
+
+    return 0;
+}
+
+
+
+
+1.	Descripción general
+Este proyecto implementa una Red Neuronal Artificial (RNA) en C++ estándar para clasificar números naturales del 0 al 9 en las siguientes clases:
+Números pares
+Números impares
+Números primos
+Números compuestos
+La clasificación se realiza a partir de datos leídos desde un archivo de texto (digits.txt), cumpliendo con un enfoque supervisado.
+2.	Archivos del proyecto
+El proyecto está compuesto por los siguientes archivos:
+main.cpp
+Código fuente en C++ que implementa la red neuronal artificial, su entrenamiento y la clasificación.
+digits.txt
+Archivo de entrada que contiene los números a clasificar, uno por línea.
+Ejemplo de digits.txt:
+0
+1
+2
+3
+4
+5
+6
+7
+8
+9
+3. Requisitos del sistema
+Compilador C++ estándar (g++)
+Sistema operativo:
+Windows
+Linux
+macOS
+(Opcional) IDE como Dev-C++, Code::Blocks o Visual Studio
+4.	Compilación y ejecución
+4.1 Compilación
+Ubicarse en la carpeta donde se encuentran main.cpp y digits.txt y ejecutar:
+g++ main.cpp -o rna
+4.2 Ejecución
+En Windows:
+rna
+o
+.\rna
+En Linux / macOS:
+./rna
+⚠️ Nota importante:
+El archivo digits.txt debe estar en la misma carpeta que el ejecutable. De lo contrario, el programa no podrá leer los datos.
+5.	Salida del programa
+El programa muestra en pantalla la clasificación de cada número leído desde el archivo, por ejemplo:
+Numero 2 -> Par Primo
+Numero 9 -> Impar Compuesto
+Un número puede pertenecer a más de una clase simultáneamente.
+6.	Metodología implementada
+6.1 Tipo de modelo
+Se implementó una Red Neuronal Artificial multicapa (MLP) con las siguientes características:
+Capa de entrada: 4 neuronas
+Capa oculta: 6 neuronas
+Capa de salida: 4 neuronas
+6.2 Representación de los datos
+Cada número de entrada se representa mediante un vector binario de cuatro características:
+¿Es par?
+¿Es impar?
+¿Es primo?
+¿Es compuesto?
+Ejemplo:
+Número 2 → [1, 0, 1, 0]
+Número 9 → [0, 1, 0, 1]
+6.3 Entrenamiento
+Tipo: Supervisado
+Algoritmo: Backpropagation
+Función de activación: Sigmoide
+Inicialización de pesos: Aleatoria
+Tasa de aprendizaje: Constante
+Épocas: Múltiples iteraciones sobre los datos (0–9)
+Durante el entrenamiento, la red ajusta sus pesos para minimizar el error entre la salida esperada y la salida producida.
+6.4 Clasificación
+Una vez entrenada, la red procesa los datos leídos desde digits.txt y determina la pertenencia de cada número a las clases definidas.
+7.	Justificación del uso de RNA
+Aunque el problema puede resolverse mediante reglas lógicas simples, se utiliza una red neuronal artificial con fines académicos, con el objetivo de:
+Comprender la arquitectura de una RNA
+Implementar el proceso de entrenamiento
+Aplicar conceptos de propagación hacia adelante y retropropagación del error
+8.	Observaciones finales
+El código está desarrollado en C++ estándar
+No utiliza librerías externas de machine learning

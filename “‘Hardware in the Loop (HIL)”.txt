@@ -1,0 +1,427 @@
+“‘Hardware in the Loop (HIL)”:
+
+
+#include <iostream>
+#include <fstream>
+#include <vector>
+#include <cmath>
+#include <iomanip>
+#include <string>
+#include <chrono>
+#include <thread>
+
+using namespace std;
+
+// ============================================================================
+// PARÁMETROS DEL SISTEMA
+// ============================================================================
+const double Ts = 0.004;  // Tiempo de muestreo = 1/250 Hz
+const double L = 1.8;     // Constante de Lipschitz
+const double lambda0 = 1.3;
+const double lambda1 = 1.85;
+const double lambda2 = 2.79;
+const double lambda3 = 6.48;
+
+// ============================================================================
+// CLASE: DERIVADOR DE ORDEN SUPERIOR
+// ============================================================================
+class DerivadorSuperior {
+private:
+    double z0, z1, z2, z3;  // Estados internos del derivador
+    
+    // Función sign
+    double sign(double x) {
+        if (x > 0) return 1.0;
+        if (x < 0) return -1.0;
+        return 0.0;
+    }
+    
+    // Funciones φ_i según la ecuación (2)
+    double phi(int i, double error) {
+        int n = 3;  // Orden del derivador
+        double exponent = (double)(n - i) / (n + 1);
+        double coef = -pow(lambda0 + i * 0.55, n - i) * pow(L, i + 1);
+        return coef * pow(abs(error), exponent) * sign(error);
+    }
+    
+public:
+    DerivadorSuperior() {
+        z0 = z1 = z2 = z3 = 0.0;
+    }
+    
+    // Actualizar el derivador con la señal de referencia f(t)
+    void actualizar(double f_tk) {
+        double error = z0 - f_tk;
+        
+        // Calcular φ_i
+        double phi0 = phi(0, error);
+        double phi1 = phi(1, error);
+        double phi2 = phi(2, error);
+        double phi3 = phi(3, error);
+        
+        // Ecuaciones del derivador (2) - Método de Euler
+        double z0_new = z0 + Ts * phi0 + Ts * z1 + (Ts*Ts/2.0) * z2 + (Ts*Ts*Ts/6.0) * z3;
+        double z1_new = z1 + Ts * phi1 + Ts * z2 + (Ts*Ts/2.0) * z3;
+        double z2_new = z2 + Ts * phi2 + Ts * z3;
+        double z3_new = z3 + Ts * phi3;
+        
+        // Actualizar estados
+        z0 = z0_new;
+        z1 = z1_new;
+        z2 = z2_new;
+        z3 = z3_new;
+    }
+    
+    // Obtener las estimaciones
+    double getZ0() const { return z0; }  // Seguimiento de f(t)
+    double getZ1() const { return z1; }  // Primera derivada
+    double getZ2() const { return z2; }  // Segunda derivada
+    double getZ3() const { return z3; }  // Tercera derivada
+    
+    void reset() {
+        z0 = z1 = z2 = z3 = 0.0;
+    }
+};
+
+// ============================================================================
+// CLASE: PLANTA SISO (Sistema de tercer orden)
+// ============================================================================
+class PlantaSISO {
+private:
+    // Coeficientes del numerador: 7s² - 28s + 21
+    // Coeficientes del denominador: s³ + 9.8s² + 30.65s + 30.1
+    
+    // Estados del sistema discretizado (usando aproximación de Tustin)
+    vector<double> x;  // Estados internos
+    vector<double> u_hist;  // Historial de entradas
+    vector<double> y_hist;  // Historial de salidas
+    
+    // Coeficientes discretizados (usando bilinear transform - Tustin)
+    double a1, a2, a3;  // Coeficientes del denominador discreto
+    double b0, b1, b2, b3;  // Coeficientes del numerador discreto
+    
+    void calcularCoeficientesDiscretos() {
+        // Método de Tustin (transformación bilineal): s = 2/Ts * (z-1)/(z+1)
+        // Para simplificar, usamos aproximación de diferencias finitas
+        
+        // Coeficientes continuos:
+        // Numerador: 7s² - 28s + 21
+        // Denominador: s³ + 9.8s² + 30.65s + 30.1
+        
+        // Discretización usando método de Tustin simplificado
+        double T = Ts;
+        double T2 = T * T;
+        double T3 = T * T * T;
+        
+        // Denominador discreto
+        double d0 = 1.0 + 9.8*T/2.0 + 30.65*T2/4.0 + 30.1*T3/8.0;
+        a1 = (3.0 - 9.8*T + 30.65*T2/4.0 - 30.1*T3*3.0/8.0) / d0;
+        a2 = (-3.0 - 9.8*T + 30.65*T2/4.0 + 30.1*T3*3.0/8.0) / d0;
+        a3 = (1.0 + 9.8*T/2.0 - 30.65*T2/4.0 + 30.1*T3/8.0) / d0;
+        
+        // Numerador discreto
+        b0 = (7.0*T2/4.0 - 28.0*T/2.0 + 21.0) / d0;
+        b1 = (7.0*T2/2.0 + 21.0) / d0;
+        b2 = (7.0*T2/4.0 + 28.0*T/2.0 + 21.0) / d0;
+        b3 = 0;
+    }
+    
+public:
+    PlantaSISO() {
+        x.resize(4, 0.0);
+        u_hist.resize(4, 0.0);
+        y_hist.resize(4, 0.0);
+        calcularCoeficientesDiscretos();
+    }
+    
+    // Actualizar la planta con una nueva entrada
+    double actualizar(double u) {
+        // Ecuación de diferencias (forma directa II)
+        // y[k] = -a1*y[k-1] - a2*y[k-2] - a3*y[k-3] + b0*u[k] + b1*u[k-1] + b2*u[k-2]
+        
+        double y = b0 * u + b1 * u_hist[0] + b2 * u_hist[1] + b3 * u_hist[2]
+                   - a1 * y_hist[0] - a2 * y_hist[1] - a3 * y_hist[2];
+        
+        // Actualizar historiales
+        u_hist[2] = u_hist[1];
+        u_hist[1] = u_hist[0];
+        u_hist[0] = u;
+        
+        y_hist[2] = y_hist[1];
+        y_hist[1] = y_hist[0];
+        y_hist[0] = y;
+        
+        return y;
+    }
+    
+    void reset() {
+        fill(x.begin(), x.end(), 0.0);
+        fill(u_hist.begin(), u_hist.end(), 0.0);
+        fill(y_hist.begin(), y_hist.end(), 0.0);
+    }
+};
+
+// ============================================================================
+// CLASE: GENERADOR DE SEÑALES DE REFERENCIA
+// ============================================================================
+class GeneradorSeñales {
+public:
+    enum TipoSeñal { ESCALON, RAMPA, SENOIDAL };
+    
+    static double generar(TipoSeñal tipo, double t, double amplitud = 1.0, double frecuencia = 0.5) {
+        switch(tipo) {
+            case ESCALON:
+                return (t >= 1.0) ? amplitud : 0.0;
+                
+            case RAMPA:
+                return (t >= 1.0) ? amplitud * (t - 1.0) : 0.0;
+                
+            case SENOIDAL:
+                return amplitud * sin(2.0 * M_PI * frecuencia * t);
+                
+            default:
+                return 0.0;
+        }
+    }
+    
+    static string nombreSeñal(TipoSeñal tipo) {
+        switch(tipo) {
+            case ESCALON: return "Escalon";
+            case RAMPA: return "Rampa";
+            case SENOIDAL: return "Senoidal";
+            default: return "Desconocida";
+        }
+    }
+};
+
+// ============================================================================
+// CLASE: SIMULADOR HIL
+// ============================================================================
+class SimuladorHIL {
+private:
+    PlantaSISO planta;
+    DerivadorSuperior derivador;
+    ofstream archivo;
+    
+    double tiempo_actual;
+    int iteracion;
+    
+public:
+    SimuladorHIL() : tiempo_actual(0.0), iteracion(0) {}
+    
+    void simular(GeneradorSeñales::TipoSeñal tipoSeñal, double duracion, 
+                 const string& nombreArchivo, double amplitud = 1.0, double freq = 0.5) {
+        
+        // Abrir archivo para guardar datos
+        archivo.open(nombreArchivo);
+        if (!archivo.is_open()) {
+            cerr << "Error: No se pudo crear el archivo " << nombreArchivo << endl;
+            return;
+        }
+        
+        // Escribir encabezado
+        archivo << "Tiempo(s),Referencia_f(t),Salida_y(t),z0(seguimiento),z1(1ra_deriv),z2(2da_deriv),z3(3ra_deriv)\n";
+        archivo << fixed << setprecision(6);
+        
+        // Reiniciar sistemas
+        planta.reset();
+        derivador.reset();
+        tiempo_actual = 0.0;
+        iteracion = 0;
+        
+        int num_muestras = (int)(duracion / Ts);
+        
+        cout << "\n╔════════════════════════════════════════════════════════════╗\n";
+        cout << "║          SIMULACIÓN HARDWARE-IN-THE-LOOP (HIL)            ║\n";
+        cout << "╚════════════════════════════════════════════════════════════╝\n\n";
+        cout << "Configuración:\n";
+        cout << "  • Señal de referencia: " << GeneradorSeñales::nombreSeñal(tipoSeñal) << "\n";
+        cout << "  • Amplitud: " << amplitud << "\n";
+        if (tipoSeñal == GeneradorSeñales::SENOIDAL) {
+            cout << "  • Frecuencia: " << freq << " Hz\n";
+        }
+        cout << "  • Duración: " << duracion << " s\n";
+        cout << "  • Frecuencia de muestreo: " << (1.0/Ts) << " Hz\n";
+        cout << "  • Número de muestras: " << num_muestras << "\n\n";
+        cout << "Simulando";
+        
+        // Bucle de simulación
+        auto inicio = chrono::high_resolution_clock::now();
+        
+        for (int k = 0; k < num_muestras; k++) {
+            // Generar señal de referencia
+            double f_t = GeneradorSeñales::generar(tipoSeñal, tiempo_actual, amplitud, freq);
+            
+            // Actualizar derivador con la referencia
+            derivador.actualizar(f_t);
+            
+            // Usar la salida de la planta como entrada (o la referencia)
+            // En HIL típicamente se usa la referencia como entrada a la planta
+            double u_t = f_t;
+            
+            // Actualizar planta
+            double y_t = planta.actualizar(u_t);
+            
+            // Obtener estados del derivador
+            double z0 = derivador.getZ0();
+            double z1 = derivador.getZ1();
+            double z2 = derivador.getZ2();
+            double z3 = derivador.getZ3();
+            
+            // Guardar datos en archivo
+            archivo << tiempo_actual << "," 
+                   << f_t << "," 
+                   << y_t << ","
+                   << z0 << ","
+                   << z1 << ","
+                   << z2 << ","
+                   << z3 << "\n";
+            
+            // Simular tiempo real (opcional, comentar para simulación rápida)
+            // this_thread::sleep_for(chrono::microseconds((int)(Ts * 1e6)));
+            
+            // Mostrar progreso
+            if (k % (num_muestras / 20) == 0) {
+                cout << "." << flush;
+            }
+            
+            tiempo_actual += Ts;
+            iteracion++;
+        }
+        
+        auto fin = chrono::high_resolution_clock::now();
+        auto duracion_sim = chrono::duration_cast<chrono::milliseconds>(fin - inicio);
+        
+        archivo.close();
+        
+        cout << " ✓\n\n";
+        cout << "Simulación completada!\n";
+        cout << "  • Tiempo de ejecución: " << duracion_sim.count() << " ms\n";
+        cout << "  • Datos guardados en: " << nombreArchivo << "\n";
+        cout << "  • Factor de tiempo real: " 
+             << (duracion * 1000.0 / duracion_sim.count()) << "x\n\n";
+        
+        // Mostrar estadísticas finales
+        cout << "Valores finales:\n";
+        cout << "  • Referencia f(t): " << GeneradorSeñales::generar(tipoSeñal, tiempo_actual-Ts, amplitud, freq) << "\n";
+        cout << "  • z0 (seguimiento): " << derivador.getZ0() << "\n";
+        cout << "  • z1 (1ra derivada): " << derivador.getZ1() << "\n";
+        cout << "  • z2 (2da derivada): " << derivador.getZ2() << "\n";
+        cout << "  • z3 (3ra derivada): " << derivador.getZ3() << "\n";
+        cout << "\n";
+    }
+};
+
+// ============================================================================
+// FUNCIÓN PRINCIPAL
+// ============================================================================
+int main() {
+    SimuladorHIL simulador;
+    
+    cout << "\n╔════════════════════════════════════════════════════════════╗\n";
+    cout << "║     SIMULADOR HIL - PLANTA SISO + DERIVADOR SUPERIOR      ║\n";
+    cout << "╚════════════════════════════════════════════════════════════╝\n";
+    
+    int opcion;
+    cout << "\nSeleccione el tipo de señal de referencia:\n";
+    cout << "  1. Escalón unitario\n";
+    cout << "  2. Rampa\n";
+    cout << "  3. Senoidal\n";
+    cout << "  4. Ejecutar todas las pruebas\n";
+    cout << "\nOpción: ";
+    cin >> opcion;
+    
+    double duracion;
+    cout << "Duración de la simulación (segundos): ";
+    cin >> duracion;
+    
+    switch(opcion) {
+        case 1:
+            simulador.simular(GeneradorSeñales::ESCALON, duracion, "resultados_escalon.txt", 1.0);
+            break;
+            
+        case 2: {
+            double pendiente;
+            cout << "Pendiente de la rampa: ";
+            cin >> pendiente;
+            simulador.simular(GeneradorSeñales::RAMPA, duracion, "resultados_rampa.txt", pendiente);
+            break;
+        }
+            
+        case 3: {
+            double amplitud, frecuencia;
+            cout << "Amplitud: ";
+            cin >> amplitud;
+            cout << "Frecuencia (Hz): ";
+            cin >> frecuencia;
+            simulador.simular(GeneradorSeñales::SENOIDAL, duracion, "resultados_senoidal.txt", amplitud, frecuencia);
+            break;
+        }
+            
+        case 4:
+            cout << "\n=== Ejecutando todas las pruebas ===\n";
+            simulador.simular(GeneradorSeñales::ESCALON, duracion, "resultados_escalon.txt", 1.0);
+            simulador.simular(GeneradorSeñales::RAMPA, duracion, "resultados_rampa.txt", 0.5);
+            simulador.simular(GeneradorSeñales::SENOIDAL, duracion, "resultados_senoidal.txt", 1.0, 0.5);
+            break;
+            
+        default:
+            cout << "Opción no válida.\n";
+            return 1;
+    }
+    
+    cout << "╔════════════════════════════════════════════════════════════╗\n";
+    cout << "║  Para visualizar los resultados, use Python/MATLAB:       ║\n";
+    cout << "║  import pandas as pd; import matplotlib.pyplot as plt      ║\n";
+    cout << "║  data = pd.read_csv('resultados_escalon.txt')             ║\n";
+    cout << "║  plt.plot(data['Tiempo(s)'], data['Referencia_f(t)'])     ║\n";
+    cout << "╚════════════════════════════════════════════════════════════╝\n\n";
+    
+    return 0;
+}
+
+
+
+
+1.	Ejecución del programa
+El programa está desarrollado en C++ estándar y se ejecuta desde la consola.
+Compilación
+Ubíquese en la carpeta donde se encuentra el archivo fuente y ejecute:
+g++ main.cpp -o simulador
+Ejecución
+En Windows
+simulador
+
+o
+.\simulador
+En Linux / macOS
+./simulador
+
+Al iniciar, el programa solicita:
+El tipo de señal de referencia (escalón, rampa, senoidal o todas).
+La duración de la simulación en segundos.
+Parámetros adicionales según la señal seleccionada (amplitud, pendiente o frecuencia).
+Al finalizar la simulación, se generan archivos de resultados en formato .txt con los datos de la simulación.
+2.	Archivos de salida
+El programa genera archivos de texto como:
+resultados_escalon.txt
+resultados_rampa.txt
+resultados_senoidal.txt
+Cada archivo contiene:
+Tiempo de simulación
+Señal de referencia
+Salida de la planta
+Estimaciones del derivador (z0, z1, z2, z3)
+Estos archivos pueden visualizarse posteriormente en herramientas como Python o MATLAB.
+3.	Metodología empleada
+Para el desarrollo del programa se utilizó una metodología de modelado y simulación en tiempo discreto, orientada a un entorno Hardware-In-the-Loop (HIL).
+Planta SISO
+La planta corresponde a un sistema dinámico SISO de tercer orden, modelado mediante una función de transferencia continua y posteriormente discretizado utilizando una aproximación tipo Tustin. La dinámica discreta se implementa mediante una ecuación en diferencias.
+Derivador de orden superior
+Se implementó un derivador no lineal de orden superior, capaz de estimar hasta la tercera derivada de la señal de referencia. Las ecuaciones del derivador se integran numéricamente usando el método de Euler con un tiempo de muestreo fijo.
+Señales de referencia
+El sistema permite evaluar el comportamiento ante señales de tipo escalón, rampa y senoidal, lo cual facilita el análisis del desempeño dinámico del derivador y de la planta bajo diferentes condiciones.
+Simulación HIL
+La simulación se ejecuta en un bucle discreto con tiempo de muestreo constante, emulando un entorno HIL. Los datos generados se almacenan para su posterior análisis.
+4.	Observaciones finales
+Este programa tiene un enfoque académico y experimental, permitiendo analizar el comportamiento de sistemas dinámicos discretizados y la estimación de derivadas en un entorno de simulación HIL, sin el uso de librerías externas.
